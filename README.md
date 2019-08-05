@@ -25,7 +25,7 @@
 * K: 2-D array
   * Training set after kernel transfer.
 * alphas: array
-  * Cofficients of the support vector.
+  * Coefficients of the support vector.
 * b: float
   * Bias of the prediction function.
 * MAPE: float
