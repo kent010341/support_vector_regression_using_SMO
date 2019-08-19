@@ -127,7 +127,7 @@ class SVR():
             raise ValueError('{:} is {:}-D, expect 1-D or 2-D.'.format(label, len(X.shape)))
 
     def _check_normalize(self, X, label):
-        if np.nonzero(np.abs(X) > 1)[0].shape[0] > 0:
+        if np.all(np.abs(X) > 1):
             print('Warning: {:} might not be normalized, which might cause overflow. Consider normalizing it.'.format(label))
 
     def _kernel_trans(self, X, Y):
