@@ -1,316 +1,326 @@
-import numpy as np 
+import numpy as np
 import random
-from sklearn.metrics import mean_squared_error as MSE
-from sklearn import preprocessing
 
 class SVR():
-	def __init__(self, kernel='rbf', C=1, gamma='auto', epsilon=0.1, max_iter=-1, debug=False, random_seed=0):
-		np.random.seed(random_seed)
-		random.seed(random_seed)
-		self.C = C
-		self.kernelVar = (kernel, gamma)
-		self.epsilon = epsilon
-		self.max_iter = max_iter
-		self.E_toler = 0.001
-		self._isFit = False
-		self.debug = debug
+    def __init__(self, kernel='rbf', C=1, gamma='auto', 
+        epsilon=0.1, random_seed=0, max_iter=-1, E_toler=0.001, debug=False):
+        np.random.seed(random_seed)
+        random.seed(random_seed)
+        self._kernel = kernel
+        self._C = C
+        self._gamma = gamma
+        self._epsilon = epsilon
+        self._max_iter = max_iter
+        self._E_toler = E_toler
+        self._debug = debug
 
-	def fit(self, train_X, train_y):
-		# Raise Exceptions
-		train_X = np.array(train_X, dtype=np.float64)
-		if not isinstance(train_X, np.ndarray):
-			raise ValueError('Training X must be numpy.ndarray or list.')
+        self._is_fit = False
+        self._custom_kernel = False
+        self._all_KKT_passed = False
 
-		train_y = np.array(train_y, dtype=np.float64)
-		if not isinstance(train_y, np.ndarray):
-			raise ValueError('Training y must be numpy.ndarray or list.')
+        # Check if kernel is custom function.
+        if hasattr(self._kernel, '__call__'):
+            assert self._check_custom_kernel(np.random.uniform(-1, 1, (5, 3))),\
+                'Kernel function must satisfy the Mercer\'s condition.'
+            self._custom_kernel = True
 
-		train_X = self._checkX(train_X, label='train_X')
-		if not len(train_X.shape) == 2:
-			raise ValueError('Training set X must be 2-D instead of {:}-D'.format(len(train_X.shape)))
+    def get_params(self):
+        if self._custom_kernel:
+            str_kernel = 'Custom Kernel'
+        else:
+            str_kernel = self._kernel
+        print('kernel = {:}, C = {:}, gamma = {:}, epsilon = {:}, max_iter = {:}, debug = {:}'\
+            .format(str_kernel, self._C, self._gamma, self._epsilon, self._max_iter, self._debug))
 
-		if not len(train_y.shape) == 1:
-			raise ValueError('Training set y must be 1-D instead of {:}-D'.format(len(train_y.shape)))
+    def fit(self, train_X, train_y):
+        # -----------------------------------------------------------------------------------------
+        # Checking parameters.
+        # Check train_X
+        assert type(train_X) in [list, np.ndarray], 'Training set X must be numpy.ndarray or list.'
+        train_X = np.array(train_X)
+        train_X = self._check_X(train_X, label='train_X')
 
-		if not len(train_X) == len(train_y):
-			raise ValueError('Training set X must have same length as Training set y.')
-		
-		self._isFit = True
-		self.train_X = train_X
-		self.train_y = train_y
+        # Check train_y
+        assert type(train_y) in [list, np.ndarray], 'Training set y must be numpy.ndarray or list.'
+        train_y = np.array(train_y)
+        assert len(train_y.shape) == 1, 'Training set y must be 1-D instead of {:}-D'.format(len(train_y.shape))
 
-		# -----------------------------------------------------------------------------------------------
-		# Preprocessing, using standardlized
-		#self.scaler = preprocessing.StandardScaler()
-		#self.scaler = preprocessing.StandardScaler().fit(self.train_X)
-		#self.train_X = self.scaler.fit_transform(self.train_X)
+        # Check data length
+        assert train_X.shape[0] == train_y.shape[0], 'Training set X must have same length as Training set y.'
 
-		# -----------------------------------------------------------------------------------------------
-		# Initialize
-		self.N, self.N_features = self.train_X.shape
-		self.isChanged = np.zeros(self.N)
-		self.K = np.mat(np.zeros((self.N, self.N)))
-		for i in range(self.N):
-			self.K[:, i] = self._kernelTrans(train_X, self.train_X[i])
-		self._debugPrint('Training data transfer to:')
-		self._debugPrint(self.K)
-		self.alphas = np.zeros(self.N)
-		self.b = 0
+        # Check if X is normalized
+        self._check_normalize(train_X, label='train_X')
 
-		# -----------------------------------------------------------------------------------------------
-		# Training with SMO
-		iterNum = 1
-		alphaPairsChanged = 0
+        self._is_fit = True
+        self._train_X = train_X
+        self._train_y = train_y
 
-		while (alphaPairsChanged > 0) or (iterNum == 1):
-			alphaPairsChanged = 0
-			self._debugPrint('=====================================')
-			self._debugPrint('iterNum = {:}'.format(iterNum))
-			if iterNum == 1:
-				for i in range(self.N):
-					self._debugPrint('-------------------------------')
-					self._debugPrint('i = {:}'.format(i))
-					alphaPairsChanged += self._innerL(i)
-			else:
-				nonBound = np.nonzero((self.alphas>-self.C)*(self.alphas<self.C))[0]
-				self._debugPrint('nonBound = ')
-				self._debugPrint(nonBound)
-				for i in nonBound:
-					self._debugPrint('-------------------------------')
-					self._debugPrint('i = {:}'.format(i))
-					alphaPairsChanged += self._innerL(i)
-			iterNum += 1
-			if self.max_iter != -1 and iterNum > self.max_iter:
-				break
+        # -----------------------------------------------------------------------------------------
+        # Initialize training
+        self._N, self._N_features = self._train_X.shape
+        self.kerneled_matrix = self._kernel_trans(self._train_X, self._train_X)
+        self._debug_print('Training data transfer to:')
+        self._debug_print(self.kerneled_matrix)
+        self._is_changed = np.zeros(self._N)
+        self.alphas = np.zeros(self._N)
+        self.b = 0
 
-		return self
+        # -----------------------------------------------------------------------------------------
+        # Training with SMO
+        iter_num = 1
+        alphas_pairs_changed = 0
 
-	def predict(self, test_X, test_y=None, y_type=np.array):
-		# Raise Exceptions
-		test_X = np.array(test_X, dtype=np.float64)
-		if not isinstance(test_X, np.ndarray):
-			raise ValueError('Testing X must be numpy.ndarray or list.')
+        while alphas_pairs_changed > 0 or iter_num == 1:
+            alphas_pairs_changed = 0
+            self._debug_print('=====================================')
+            self._debug_print('iter_num =', iter_num)
 
-		test_X = self._checkX(test_X, label='train_X')
-		if not len(test_X.shape) == 2:
-			raise ValueError('Training set X must be 2-D instead of {:}-D'.format(len(train_X.shape)))
+            if iter_num == 1:
+                seq_SV = list(range(self._N))
+            else:
+                seq_SV = np.nonzero((self.alphas > -self._C)*(self.alphas < self._C))[0]
+                self._debug_print('non_bound =')
+                self._debug_print(seq_SV)
 
-		# predict
-		if not self._isFit:
-			raise Exception('SVR model hasn\'t been trained.')
+            for i in seq_SV:
+                self._debug_print('-------------------------------')
+                self._debug_print('i =', i)
+                alphas_pairs_changed += self._update_alphas(i)
+                if self._all_KKT_passed:
+                    break
 
-		# standardlized
-		#test_X = self.scaler.transform(test_X)
+            iter_num += 1
+            if self._max_iter != -1 and iter_num > self._max_iter:
+                break
 
-		pred_y = list(range(self.N))
-		for i in range(self.N):
-			transX = self._kernelTrans(self.train_X, test_X[i])
-			pred_y[i] = (np.dot(self.alphas, transX.T[0]) + self.b)
+        return self
 
-		# Error
-		if not isinstance(test_y, type(None)):
-			try:
-				if len(test_y) == len(pred_y):
-					self.MAPE = self._calMAPE(test_y, pred_y)
-					self.RMSE = self._calRMSE(test_y, pred_y)
-			except:
-				pass
+    def predict(self, test_X):
+        # -----------------------------------------------------------------------------------------
+        # Checking parameters.
+        # Check test_X
+        assert type(test_X) in [list, np.ndarray], 'Testing set X must be numpy.ndarray or list.'
+        test_X = np.array(test_X)
+        test_X = self._check_X(test_X, label='test_X')
 
-		return y_type(pred_y) 
+        # Check if X is normalized
+        self._check_normalize(test_X, label='test_X')
 
-	def _checkX(self, X, label):	
-		if len(X.shape) == 1:
-			print('Warning: {:} is 1-D, automatically reshape to ({:}, {:})'\
-				.format(label, X.shape[0], 1))
-			return X.reshape(-1, 1)
-		else:
-			return X
+        # Check if it's already fit.
+        assert self._is_fit, 'SVR model hasn\'t been trained.'
 
-	def _kernelTrans(self, X, sampleX):
-		m = len(X)
-		K = np.zeros((m, 1))
-		if self.kernelVar[0] == 'linear':
-			K = X * sampleX.T
-		elif self.kernelVar[0] == 'rbf':
-			sigma = self.kernelVar[1]
-			if sigma == 'auto':
-				sigma = np.true_divide(1, self.N_features)
-			elif sigma == 'scale':
-				sigma = np.true_divide(self.N_features, X.var())
-			if sigma == 0: 
-				sigma = 1
-			for i in range(m):
-				deltaRow = (X[i, :] - sampleX)[0]
-				rbf_value = np.exp(np.true_divide(deltaRow * deltaRow.T, (-2.0 * sigma ** 2)))
-				if rbf_value == np.inf:
-					print('Warning: Overflow encountered while using kernel, consider normalize or standardlize X.')
-				K[i] = rbf_value
-		else:
-			raise NameError('Not support kernel type! You can use linear or rbf!')
-		return K
+        # -----------------------------------------------------------------------------------------
+        # Predict
+        kerneled_test = self._kernel_trans(self._train_X, test_X)
+        pred_y = np.dot(kerneled_test, self.alphas) + self.b
 
-	def _innerL(self, i):
-		self._debugPrint('alphas = ')
-		self._debugPrint(self.alphas)
-		self._debugPrint('b =')
-		self._debugPrint(self.b)
+        return pred_y
 
-		Ei = self._calError(i)
-		self._debugPrint('Ei =')
-		self._debugPrint(Ei)
+    def _check_X(self, X, label):    
+        if len(X.shape) == 1:
+            print('Warning: {:} is 1-D, automatically reshape to ({:}, {:})'\
+                .format(label, X.shape[0], 1))
+            return X.reshape(-1, 1)
+        elif len(X.shape) == 2:
+            return X
+        else:
+            raise ValueError('{:} is {:}-D, expect 1-D or 2-D.'.format(label, len(X.shape)))
 
-		isVioletKKT = not self._checkKKT(i, Ei)
-		j ,Ej = self._selectJ(i, Ei, isVioletKKT)
-		
-		if j == -1:
-			self._debugPrint('all KKT pass')
-			return 0
+    def _check_normalize(self, X, label):
+        if np.nonzero(np.abs(X) > 1)[0].shape[0] > 0:
+            print('Warning: {:} might not be normalized, which might cause overflow. Consider normalizing it.'.format(label))
 
-		self._debugPrint('j = {:}'.format(j))
-		self._debugPrint('Ej = {:}'.format(Ej))
+    def _kernel_trans(self, X, Y):
+        if self._custom_kernel:
+            return self.kernel(X, Y)
+        elif self._kernel == 'linear':
+            return Y.dot(X.T)
+        elif self._kernel == 'rbf':
+            K_rbf = []
+            for y in Y:
+                temp = np.exp(-np.sum(np.square(X - y), 1) / self._gamma**2)
+                K_rbf.append(temp)
+            return np.array(K_rbf)
+        else:
+            raise ValueError('The kernel: {:} isn\'t supported for now.'.format(self._kernel))
 
-		alphaIold = self.alphas[i].copy()
-		alphaJold = self.alphas[j].copy()
+    def _check_custom_kernel(self, X):
+        # Check Mercer's condition.
+        kerneled_X = self.kernel(X, X)
+        # K \in R^(n*n)
+        condition_1 = kerneled_X.shape[0] == kerneled_X.shape[1]
+        # positive semi-definite
+        condition_2 = np.all(np.linalg.eigvals(kerneled_X) >= 0)
+        # symmetric matrix
+        condition_3 = True
+        for i in range(kerneled_X.shape[0]):
+            for j in range(kerneled_X.shape[1]):
+                if kerneled_X[i, j] != kerneled_X[j, i]:
+                    condition_3 = False
 
-		L = max(-self.C, alphaIold + alphaJold - self.C)
-		self._debugPrint('L =')
-		self._debugPrint(L)
-		H = min(self.C, alphaIold + alphaJold + self.C)
-		self._debugPrint('H =')
-		self._debugPrint(H)
+        return condition_1 and condition_2 and condition_3
 
-		if L == H:
-			return 0
+    def _update_alphas(self, i):
+        self._debug_print('alphas = ')
+        self._debug_print(self.alphas)
+        self._debug_print('b = ')
+        self._debug_print(self.b)
 
-		eta = self.K[i, i] + self.K[j, j] - 2.0 * self.K[i, j]
-		self._debugPrint('eta =')
-		self._debugPrint(eta)
-		if eta <= 0:
-			self._debugPrint('eta<=0')
-			return 0
+        # Calculate error at index i
+        Ei = self._cal_error(i)
+        self._debug_print('Ei =', Ei)
 
-		# update j
-		is_jUpdate = False
-		I = alphaIold + alphaJold
-		for sgn in [-2, 0, 2, -1, 1]:
-			self._debugPrint('try sgn = {:}'.format(sgn))
-			tmpJ = alphaJold + np.true_divide((Ei - Ej + self.epsilon * sgn), eta)
-			self._debugPrint('tmpJ = {:}'.format(tmpJ))
-			if np.sign(I - tmpJ) - np.sign(tmpJ) == sgn:
-				self.alphas[j] = tmpJ
-				is_jUpdate = True
-				break
-		if not is_jUpdate:
-			return 0
-		self._debugPrint('A_j,new = {:}'.format(self.alphas[j]))
-		if self.alphas[j] > H:
-			self.alphas[j] = H
-		if self.alphas[j] < L:
-			self.alphas[j] = L
-		self._debugPrint('A_j,new,cli = {:}'.format(self.alphas[j]))
+        # Check KKT condition
+        is_violet_KKT = not self._check_KKT(i, Ei)
+        if is_violet_KKT:
+            self._debug_print('i doesn\'t violet the KKT condition.')
+            return 0
 
-		if abs(self.alphas[j] - alphaJold) < 0.00001:
-			self._debugPrint('alphas[j] changes too small.')
-			self.isChanged[j] = 1
-			return 0
+        # Select j
+        j, Ej = self._select_j(i, Ei)
 
-		# update i
-		self.alphas[i] += (alphaJold - self.alphas[j])
-		self._debugPrint('A_i,new = {:}'.format(self.alphas[i]))
-		bi = -(Ei + (self.alphas[i] - alphaIold) * self.K[i, i]\
-			+ (self.alphas[j] - alphaJold) * self.K[i, j]) + self.b
-		bj = -(Ej + (self.alphas[i] - alphaIold) * self.K[i, j]\
-			+ (self.alphas[j] - alphaJold) * self.K[j, j]) + self.b
-		if self.alphas[i] > -self.C and self.alphas[i] < self.C:
-			self.b = bi
-			self._debugPrint('bi is avaliable')
-		elif self.alphas[j] > -self.C and self.alphas[j] < self.C:
-			self.b = bj
-			self._debugPrint('bj is avaliable')
-		else:
-			self.b = np.true_divide((bi + bj), 2)
-			self._debugPrint('b update to (bi+bj)/2')
-		self.isChanged[i] = 1
-		self.isChanged[j] = 1
+        # If all of the SV has passed the KKT condition, break the training process.
+        if j == -1:
+            self._debug_print('all of the SV has passed the KKT condition.')
+            self._all_KKT_passed = True
+            return 0
 
-		return 1
-			
-	def _calError(self, i):
-		s = 0
-		for x, y in zip(self.alphas, self.K[:, i].A.T[0]):
-			s += x*y
-		Ei = float(s) + float(self.b) - self.train_y[i]
-		return Ei
+        self._debug_print('j =', j)
+        self._debug_print('Ej =', Ej)
 
-	def _checkKKT(self, i, Ei=None):
-		if Ei == None:
-			Ei = self._calError(i)
+        # Save the old i and j
+        alpha_i_old = self.alphas[i].copy()
+        alpha_j_old = self.alphas[j].copy()
 
-		KKTpass = False
-		if self.alphas[i] == 0 and abs(Ei) < self.epsilon + self.E_toler:
-			KKTpass = True
-		if self.alphas[i] != 0 and self.alphas[i] > -self.C and self.alphas[i] < self.C and \
-			abs(Ei) < self.epsilon + self.E_toler and abs(Ei) > self.epsilon - self.E_toler:
-			KKTpass = True
-		if abs(self.alphas[i]) == self.C and abs(Ei) > self.epsilon - self.E_toler:
-			KKTpass = True 
+        # Calculate the lower and upper bound
+        lower_bound = max(-self._C, alpha_i_old + alpha_j_old - self._C)
+        self._debug_print('lower_bound =', lower_bound)
+        upper_bound = min(self._C, alpha_i_old + alpha_j_old + self._C)
+        self._debug_print('upper_bound =', upper_bound)
 
-		return KKTpass
+        # This may not happen, but if the lower_bound equals to upper_bound, returning 0.
+        if lower_bound == upper_bound:
+            return 0
 
-	def _selectJ(self, i, Ei, isVioletKKT):
-		# i and j should be at least one violate KKT conditions.
-		seq = []
-		E = np.zeros(self.N)-9999
-		if not isVioletKKT:
-			# Finding i violet KKT conditions.
-			for n in range(self.N):
-				if n == i:
-					continue
-				E[n] = self._calError(n)
-				if (not self._checkKKT(n, E[n])) and \
-					(self.train_X[i] != self.train_X[n] or \
-					self.train_y[i] != self.train_y[n]):
-					seq.append(n)
-		else:
-			for n in range(self.N):
-				if n == i:
-					continue
-				if self.train_X[i] != self.train_X[n] or \
-					self.train_y[i] != self.train_y[n]:
-					seq.append(n)
+        # Calculate eta
+        eta = self.kerneled_matrix[i, i] + self.kerneled_matrix[j, j] - 2.0 * self.kerneled_matrix[i, j]
+        self._debug_print('eta =', eta)
+        # May not happen
+        if eta <= 0:
+            self._debug_print('eta<=0')
+            return 0
 
-		self._debugPrint('Avaliable index for selecting j: ')
-		self._debugPrint(seq)
-		if len(seq) == 0:
-			return -1, None
-		'''
-		maxStep = -1
-		for k in seq:
-			if E[k] == -9999:
-				E[k] = self._calError(k)
-			self._debugPrint('E{:} = {:}'.format(k, E[k]))
-			step = abs(E[k] - Ei)
-			if maxStep < step:
-				maxStep = step
-				j = k
-		'''
-		j = np.random.choice(seq)
-		if E[j] == -9999:
-			E[j] = self._calError(j)
+        # update j
+        is_j_update = False
+        I = alpha_i_old + alpha_j_old
+        for sgn in [-2, 0, 2, -1, 1]:
+            self._debug_print('try sgn =', sgn)
+            temp_j = alpha_j_old + (Ei - Ej + self._epsilon)
+            self._debug_print('temp_j =', temp_j)
+            if np.sign(I - temp_j) - np.sign(temp_j) == sgn:
+                self.alphas[j] = temp_j
+                is_j_update = True
+                break
+        if not is_j_update:
+            return 0
 
-		return j ,E[j]
-		
-	def _calMAPE(self, arrReal, arrPredict):
-		sumValue = 0
-		for i in range(len(arrReal)):
-			sumValue += abs(np.true_divide((arrReal[i] - arrPredict[i]), arrPredict[i]))
-			#sumValue += ((arrReal[i] - arrPredict[i]))
+        self._debug_print('A_j,new =', self.alphas[j])
+        self.alphas[j] = max(min(self.alphas[j], upper_bound), lower_bound)
+        self._debug_print('A_j,new,cli =', self.alphas[j])
 
-		return np.true_divide(sumValue, len(arrPredict)) * 100
+        if abs(self.alphas[j] - alpha_j_old) < 1e-5:
+            self._debug_print('A_j changes too small.')
+            self._is_changed[j] = 1
+            return 0
 
-	def _calRMSE(self, arrReal, arrPredict):
-		return MSE(arrReal, arrPredict)**0.5
+        # update i
+        self.alphas[i] += alpha_j_old - self.alphas[j]
+        self._debug_print('A_i,new =', self.alphas[i])
 
-	def _debugPrint(self, string):
-		if self.debug:
-			print(string)
+        # Calculate bi and bj
+        bi = -(Ei + (self.alphas[i] - alpha_i_old) * self.kerneled_matrix[i, i]\
+            + (self.alphas[j] - alpha_j_old) * self.kerneled_matrix[i, j]) + self.b
+        bj = -(Ei + (self.alphas[i] - alpha_i_old) * self.kerneled_matrix[i, j]\
+            + (self.alphas[j] - alpha_j_old) * self.kerneled_matrix[j, j]) + self.b
+
+        # Check if bi or bj is avaliable
+        if abs(self.alphas[i]) < self._C:
+            self.b = bi
+            self._debug_print('bi is avaliable.')
+        elif abs(self.alphas[j]) < self._C:
+            self.b = bj
+            self._debug_print('bj is avaliable.')
+        else:
+            self.b = (bi + bj) / 2
+            self._debug_print('b update to (bi+bj)/2')
+
+        self._is_changed[i] = 1
+        self._is_changed[j] = 1
+
+        return 1
+
+    def _cal_error(self, i):
+        fi = self.alphas.dot(self.kerneled_matrix[i].T) + self.b
+        return fi - self._train_y[i]
+
+    def _select_j(self, i, Ei):
+        # i and j must be at least one violet the KKT condition.
+        changed_seq = np.nonzero(self._is_changed)[0]
+        self._debug_print('changed_seq =', changed_seq)
+        if changed_seq.shape[0] == 0:
+            random_seq = np.arange(self._N)
+            random_seq = np.append(random_seq[:i], random_seq[i+1:])
+            j = np.random.choice(random_seq)
+            Ej = self._cal_error(j)
+        else:
+            max_step = -np.inf
+            for c in changed_seq:
+                if c == i:
+                    continue
+                temp_error = self._cal_error(c)
+                temp_step = abs(temp_error - Ei)
+                if temp_step > max_step:
+                    max_step = temp_step
+                    j, Ej = c, temp_error
+
+        return j, Ej
+
+    def _check_KKT(self, i, Ei=None):
+        if isinstance(Ei, type(None)):
+            Ei = self._cal_error(i)
+
+        condition_1 = self.alphas[i] == 0 and abs(Ei) < self._epsilon + self._E_toler
+        condition_2 = self.alphas[i] != 0 and abs(self.alphas[i]) < self._C and\
+            abs(Ei) <= self._epsilon + self._E_toler and abs(Ei) >= self._epsilon - self._E_toler
+        condition_3 = abs(self.alphas[i]) == self._C and abs(Ei) > self._epsilon - self._E_toler
+
+        return not (condition_1 or condition_2 or condition_3)
+
+    def _debug_print(self, *string):
+        if self._debug:
+            output_str = ''
+            for s in string:
+                output_str += self._var_form(s) + ' '
+            print(output_str[:-1])
+
+    def _var_form(self, var):
+        # This method is made for making variable easily being copied to use in further coding.
+        # check list, np.ndarray, tuple
+        if type(var) in [list, np.ndarray, tuple]:
+            if isinstance(var, list):
+                temp_str, end_str = '[', ']'
+            elif isinstance(var, np.ndarray):
+                temp_str, end_str = 'np.array([', '])'
+            elif isinstance(var, tuple):
+                temp_str, end_str = '(', ')'
+
+            if len(var) != 0:
+                for v in var:
+                    temp_str += self._var_form(v) + ', '
+                temp_str = temp_str[:-2] + end_str
+            else:
+                temp_str += end_str
+
+            return temp_str
+        else:
+            return str(var)
