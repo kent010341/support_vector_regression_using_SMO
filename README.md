@@ -37,6 +37,11 @@
   * Fit the model according to the given training data.
 * predict(self, test_X, test_y=None, y_type=np.array):
   * Perform regression on testing input, calculating MAPE and RMSE value if test_y is given. Type of the output can be change by y_type.
+  * Can only be used if the model is fit or loaded.
+* save_model(self, save_dir='default', file_name='default'):
+  * Save the trained model as json form. Defaultly using "trained_models" as save_dir and time form as file_name.
+* load_model(self, file_dir):
+  * Load the trained model.
 
 ---
 ## Reference:
