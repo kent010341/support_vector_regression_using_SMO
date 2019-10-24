@@ -24,6 +24,7 @@ class SVR():
         # Check if kernel is custom function.
         if hasattr(self._kernel, '__call__'):
             self._custom_kernel = True
+            assert self._check_mercer_s_conditions(), 'Kernel must satisfy Mercer\'s conditions.'
 
     def get_params(self):
         if self._custom_kernel:
@@ -166,6 +167,24 @@ class SVR():
 
         return self
 
+    def _check_mercer_s_conditions(self):
+        rand_X = np.random.random((5,2))
+        trans_X = self, _kernel_trans(rand_X, rand_X)
+        n, m = train_X.shape
+
+        condition_1 = n == m
+        if not condition_1:
+            return False
+
+        condition_2 = True
+        for i in range(n):
+            for j in range(i+1, m):
+                if trans_X[i, j] != trans_X[j, i]:
+                    condition_2 = False
+        condition_3 = np.all(np.linalg.eigvals(train_X) >= 0)
+
+        return condition_1 and condition_2 and condition_3
+
     def _check_X(self, X, label):    
         if len(X.shape) == 1:
             print('Warning: {:} is 1-D, automatically reshape to ({:}, {:})'\
@@ -177,7 +196,10 @@ class SVR():
             raise ValueError('{:} is {:}-D, expect 1-D or 2-D.'.format(label, len(X.shape)))
 
     def _check_normalize(self, X, label):
-        if np.nonzero(np.abs(X) > 1)[0].shape[0] > 0:
+        not_abs_1 = np.nonzero(np.abs(X) > 1)[0].shape[0] > 0
+        not_standard = not (np.all(X.mean(0) == 0) and np.all(X.std(0) == 1))
+
+        if not_abs_1 and not_standard:
             print('Warning: {:} might not be normalized, which might cause overflow. Consider normalizing it.'.format(label))
 
     def _kernel_trans(self, X, Y):
