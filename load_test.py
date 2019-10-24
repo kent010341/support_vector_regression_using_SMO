@@ -1,4 +1,4 @@
-from SVR_class_new import SVR
+from SVR_class import SVR
 import numpy as np
 
 data_2016 = np.array([[10], [9], [17], [10]])
