@@ -1,5 +1,8 @@
 import numpy as np
 import random
+from datetime import datetime
+import os
+import json
 
 class SVR():
     def __init__(self, kernel='rbf', C=1, gamma='auto', 
@@ -20,8 +23,6 @@ class SVR():
 
         # Check if kernel is custom function.
         if hasattr(self._kernel, '__call__'):
-            assert self._check_custom_kernel(np.random.uniform(-1, 1, (5, 3))),\
-                'Kernel function must satisfy the Mercer\'s condition.'
             self._custom_kernel = True
 
     def get_params(self):
@@ -116,6 +117,55 @@ class SVR():
 
         return pred_y
 
+    def save_model(self, save_dir='default', file_name='default'):
+        # Check if model is trained.
+        assert self._is_fit, 'SVR model hasn\'t been trained.'
+        assert not self._custom_kernel, 'Custom kernel isn\'t supported for saveing model.'
+        # Generate file dir.
+        if save_dir == 'default':
+            save_dir = 'trained_models/'
+        if file_name == 'default':
+            file_name = datetime.now().strftime('SVR_%Y%m%d_%H%M%S.txt')
+        self._check_and_create_dir(save_dir)
+
+        dejson_data = {
+            'C': self._C,
+            'gamma': self._gamma,
+            'epsilon': self._epsilon,
+            'max_iter': self._max_iter,
+            'debug': self._debug,
+            'kernel': self._kernel,
+            'train_X': self._train_X.tolist(),
+            'alphas': self.alphas.tolist(),
+            'b': self.b
+        }
+
+        with open(save_dir + file_name, 'a', encoding='utf-8') as fp:
+            fp.write(json.dumps(dejson_data))
+
+        print('Model has been saved.')
+
+    def load_model(self, file_dir):
+        with open(file_dir, 'r+') as fp:
+            json_data = fp.read()
+        dejson_data = json.loads(json_data)
+
+        self._C = dejson_data['C']
+        self._gamma = dejson_data['gamma']
+        self._epsilon = dejson_data['epsilon']
+        self._max_iter = dejson_data['max_iter']
+        self._debug = dejson_data['debug']
+        self._kernel = dejson_data['kernel']
+        self._train_X = np.array(dejson_data['train_X'])
+        self.alphas = np.array(dejson_data['alphas'])
+        self.b = dejson_data['b']
+
+        self._is_fit = True
+
+        print('Model has been loaded.')
+
+        return self
+
     def _check_X(self, X, label):    
         if len(X.shape) == 1:
             print('Warning: {:} is 1-D, automatically reshape to ({:}, {:})'\
@@ -127,7 +177,7 @@ class SVR():
             raise ValueError('{:} is {:}-D, expect 1-D or 2-D.'.format(label, len(X.shape)))
 
     def _check_normalize(self, X, label):
-        if np.all(np.abs(X) > 1):
+        if np.nonzero(np.abs(X) > 1)[0].shape[0] > 0:
             print('Warning: {:} might not be normalized, which might cause overflow. Consider normalizing it.'.format(label))
 
     def _kernel_trans(self, X, Y):
@@ -143,22 +193,6 @@ class SVR():
             return np.array(K_rbf)
         else:
             raise ValueError('The kernel: {:} isn\'t supported for now.'.format(self._kernel))
-
-    def _check_custom_kernel(self, X):
-        # Check Mercer's condition.
-        kerneled_X = self.kernel(X, X)
-        # K \in R^(n*n)
-        condition_1 = kerneled_X.shape[0] == kerneled_X.shape[1]
-        # positive semi-definite
-        condition_2 = np.all(np.linalg.eigvals(kerneled_X) >= 0)
-        # symmetric matrix
-        condition_3 = True
-        for i in range(kerneled_X.shape[0]):
-            for j in range(kerneled_X.shape[1]):
-                if kerneled_X[i, j] != kerneled_X[j, i]:
-                    condition_3 = False
-
-        return condition_1 and condition_2 and condition_3
 
     def _update_alphas(self, i):
         self._debug_print('alphas = ')
@@ -305,8 +339,14 @@ class SVR():
 
     def _var_form(self, var):
         # This method is made for making variable easily being copied to use in further coding.
+        # check int, float, string, etc.
+        if type(var) in [int, float, str, complex, np.int_, np.int0, np.int8, np.int16, \
+            np.int32, np.int64, np.float_, np.float16, np.float32, np.float64, \
+            np.complex_, np.complex64, np.complex128, type(None)]:
+            return str(var)
+
         # check list, np.ndarray, tuple
-        if type(var) in [list, np.ndarray, tuple]:
+        elif type(var) in [list, np.ndarray, tuple]:
             if isinstance(var, list):
                 temp_str, end_str = '[', ']'
             elif isinstance(var, np.ndarray):
@@ -324,3 +364,12 @@ class SVR():
             return temp_str
         else:
             return str(var)
+
+    def _check_and_create_dir(self, detail_dir):
+        arr_folder = detail_dir.split('/')
+        current_dir = ''
+        for f in arr_folder:
+            current_dir += f
+            if not os.path.isdir(current_dir):
+                os.mkdir(current_dir)
+            current_dir += '/'
