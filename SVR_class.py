@@ -169,7 +169,7 @@ class SVR():
 
     def _check_mercer_s_conditions(self):
         rand_X = np.random.random((5,2))
-        trans_X = self, _kernel_trans(rand_X, rand_X)
+        trans_X = self._kernel_trans(rand_X, rand_X)
         n, m = train_X.shape
 
         condition_1 = n == m
