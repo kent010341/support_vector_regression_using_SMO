@@ -361,14 +361,8 @@ class SVR():
 
     def _var_form(self, var):
         # This method is made for making variable easily being copied to use in further coding.
-        # check int, float, string, etc.
-        if type(var) in [int, float, str, complex, np.int_, np.int0, np.int8, np.int16, \
-            np.int32, np.int64, np.float_, np.float16, np.float32, np.float64, \
-            np.complex_, np.complex64, np.complex128, type(None)]:
-            return str(var)
-
         # check list, np.ndarray, tuple
-        elif type(var) in [list, np.ndarray, tuple]:
+        if type(var) in [list, np.ndarray, tuple]:
             if isinstance(var, list):
                 temp_str, end_str = '[', ']'
             elif isinstance(var, np.ndarray):
@@ -378,12 +372,26 @@ class SVR():
 
             if len(var) != 0:
                 for v in var:
-                    temp_str += self._var_form(v) + ', '
+                    if isinstance(var, np.ndarray):
+                        temp_str += self._var_form(v.tolist()) + ', '
+                    else:
+                        temp_str += self._var_form(v) + ', '
                 temp_str = temp_str[:-2] + end_str
             else:
                 temp_str += end_str
 
             return temp_str
+
+        # check dict
+        elif isinstance(var, dict):
+            if len(var) != 0:
+                temp_str = '{'
+                for key, value in var.items():
+                    temp_str += '{:}: {:}, '.format(self._var_form(key), self._var_form(value))
+                temp_str = temp_str[:-2] + '}'
+                return temp_str
+            else:
+                return '{}'
         else:
             return str(var)
 
